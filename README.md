@@ -22,7 +22,7 @@
 
 ### 1. インストール
 
-Python 3.10 以上が必要です。
+Python 3.11 以上 3.14 未満が必要です（依存する `colmi_r02_client` の制約）。Windows で `py --list` を実行して該当バージョンが無い場合は [python.org](https://www.python.org/downloads/) からインストールしてください（インストーラーの "Add python.exe to PATH" にチェックを入れてください）。
 
 ```bash
 pip install .

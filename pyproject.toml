@@ -3,7 +3,7 @@ name = "colmi-r02-vrchat"
 version = "0.1.0"
 description = "Stream real-time heart rate from a Colmi R02 smart ring to a VRChat avatar via OSC"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "colmi_r02_client @ git+https://github.com/tahnok/colmi_r02_client.git",
     "python-osc>=1.8",
