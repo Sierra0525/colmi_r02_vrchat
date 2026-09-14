@@ -25,8 +25,12 @@
 Python 3.11 以上 3.14 未満が必要です（依存する `colmi_r02_client` の制約）。Windows で `py --list` を実行して該当バージョンが無い場合は [python.org](https://www.python.org/downloads/) からインストールしてください（インストーラーの "Add python.exe to PATH" にチェックを入れてください）。
 
 ```bash
-pip install .
+pip install -e .
 ```
+
+`-e`（editable install）を付けてください。付けずに `pip install .` すると、その時点のソースコードが Python の `site-packages` にコピーされるため、後で `git pull` してもインストール済みのコードには反映されず、修正が効いていないように見えてしまいます。`-e` を付けておけば、リポジトリのソースを直接参照するようになるので、`git pull` するだけで最新のコードがすぐ使われるようになります。
+
+（すでに `-e` 無しでインストール済みの場合は、`git pull` のたびに `pip install .` を実行し直すか、一度 `pip install -e .` で入れ直してください）
 
 (Bluetooth を使うため Linux では BlueZ、macOS/Windows は OS 標準の Bluetooth スタックが必要です。詳細は [bleak](https://github.com/hbldh/bleak) を参照してください。)
 
