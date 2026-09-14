@@ -44,9 +44,11 @@ def main(argv: list[str] | None = None) -> None:
         level=logging.DEBUG if args.debug else logging.INFO,
         format="%(asctime)s %(name)s: %(message)s",
     )
-    # bleak is very chatty at INFO/DEBUG, quiet it down unless debugging deeply
+    # bleak and colmi_r02_client log every raw BLE packet at INFO; quiet them down so
+    # the primary log output is our own "Heart rate: N bpm" line, not packet dumps.
     if not args.debug:
         logging.getLogger("bleak").setLevel(logging.WARNING)
+        logging.getLogger("colmi_r02_client").setLevel(logging.WARNING)
 
     try:
         asyncio.run(run(args.address, args.osc_ip, args.osc_port, args.reconnect_delay))
