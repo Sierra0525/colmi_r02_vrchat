@@ -20,9 +20,9 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from bleak.exc import BleakError
+from colmi_r02_client import client as client_module
 from colmi_r02_client import real_time
 from colmi_r02_client.client import Client
-from colmi_r02_client.real_time import RealTimeReading
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,35 @@ CONNECTION_ERRORS = (BleakError, asyncio.TimeoutError, OSError, EOFError)
 
 # How often to send a "continue" packet to keep the ring's real-time session alive.
 CONTINUE_INTERVAL = 1.0
+
+# colmi_r02_client.real_time.RealTimeReading only defines HEART_RATE = 1, with
+# a comment that a value of 6 ("REAL_TIME_HEART_RATE" in other reverse-engineering
+# notes for this protocol) was "left out as it's redundant". On at least some
+# firmware (observed: R02_3.00.17) requesting type 1 never actually turns on the
+# PPG sensor -- readings stay 0 forever even though the official app measures
+# fine -- while type 6 is documented elsewhere as the real continuous-streaming
+# request. Try that raw value instead of the library's HEART_RATE enum member.
+REALTIME_HEART_RATE = 6
+
+
+@dataclass
+class RawReading:
+    kind: int
+    error_code: int
+    value: int
+
+
+def _parse_real_time_reading_tolerant(packet: bytearray) -> RawReading:
+    """Like real_time.parse_real_time_reading, but doesn't blow up on a `kind`
+    byte that isn't a member of the library's (incomplete) RealTimeReading enum.
+    """
+    assert packet[0] == real_time.CMD_START_REAL_TIME
+    return RawReading(kind=packet[1], error_code=packet[2], value=packet[3])
+
+
+# Replace the library's strict parser for this one packet type so a `kind` of 6
+# doesn't raise ValueError inside bleak's notification callback.
+client_module.COMMAND_HANDLERS[real_time.CMD_START_REAL_TIME] = _parse_real_time_reading_tolerant
 
 
 @dataclass
@@ -59,7 +88,7 @@ RingEvent = Connected | Disconnected | HeartRate | NoReading
 async def stream_heart_rate(address: str, reconnect_delay: float = 5.0) -> AsyncIterator[RingEvent]:
     """Yield heart rate events from the ring forever, reconnecting on failure."""
 
-    reading_type = RealTimeReading.HEART_RATE
+    reading_type = REALTIME_HEART_RATE
 
     while True:
         try:
@@ -86,8 +115,8 @@ async def stream_heart_rate(address: str, reconnect_delay: float = 5.0) -> Async
 
                         if data is None:
                             yield NoReading()
-                        elif isinstance(data, real_time.ReadingError):
-                            logger.warning(f"Ring reported an error for {data.kind.name}: code {data.code}")
+                        elif data.error_code != 0:
+                            logger.warning(f"Ring reported an error for reading kind {data.kind}: code {data.error_code}")
                             yield NoReading()
                         elif data.value == 0:
                             yield NoReading()
