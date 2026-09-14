@@ -34,9 +34,8 @@ async def run(address: str, osc_ip: str, osc_port: int, reconnect_delay: float) 
             case HeartRate(bpm=bpm):
                 logger.info(f"Heart rate: {bpm} bpm")
                 osc.send_heart_rate(bpm)
-                osc.send_active(True)
             case NoReading():
-                osc.send_active(False)
+                logger.debug("No valid reading this cycle (is the ring being worn?)")
 
 
 def main(argv: list[str] | None = None) -> None:

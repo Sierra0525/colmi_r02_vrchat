@@ -6,15 +6,17 @@
 
 ## 送信する OSC パラメータ
 
-[vrc-osc-miband-hrm](https://github.com/vard88508/vrc-osc-miband-hrm) など既存の心拍数配信ツールと同じ命名規則に合わせているため、それらに対応済みのアバター（BOOTH等で配布されている心拍数表示ギミック）にもそのまま使えます。
+[iron-heart](https://github.com/nullstalgia/iron-heart) と、それに合わせている [HeartOSC](https://github.com/hizkifw/HeartOSC) のデフォルトパラメータ規約に合わせています。[PIXEL PULSE](https://pixelpulse.nsuke5.workers.dev/) をはじめ、iron-heart / HeartOSC 対応をうたっているアバターギミックにそのまま使えます。
 
 | パラメータ | 型 | 範囲 | 用途 |
 | --- | --- | --- | --- |
-| `Heartrate` | Float | -1 〜 1 (0-255bpm) | 数値表示用（精度重視） |
-| `Heartrate2` | Float | 0 〜 1 (0-255bpm) | アニメーション制御用（粗いが安定） |
-| `Heartrate3` | Int | 0 〜 255 | しきい値判定用（例: 130bpm 超えたら衣装変更） |
-| `isHRConnected` | Bool | - | リングと接続中かどうか（拡張・任意） |
-| `isHRActive` | Bool | - | 直近で有効な心拍値を受信しているか（拡張・任意） |
+| `isHRConnected` | Bool | - | リングと BLE 接続中かどうか |
+| `HeartBeatToggle` | Bool | - | 新しい心拍値を受信するたびに true/false が反転 |
+| `isHRBeat` | Bool | - | 新しい心拍値を受信すると一定時間 (デフォルト0.1秒) true になるパルス |
+| `HR` | Int | 0 〜 255 | 心拍数（bpm） |
+| `floatHR` | Float | -1 〜 1 (0-255bpm) | 心拍数の正規化値 |
+
+なお Colmi R02 のリアルタイム取得 API は個々の心拍（拍動）ではなく一定間隔で平均化された bpm 値を返す仕様のため、`HeartBeatToggle` / `isHRBeat` は実際の1拍ごとではなく「新しい bpm サンプルを受信するたび」に発火する近似的な動作になります。
 
 ## セットアップ
 
@@ -42,7 +44,7 @@ colmi_r02_util scan
 
 VRChat 内の Action Menu → Options → OSC → Enabled をオンにしてください。デフォルトでは `127.0.0.1:9000` で OSC メッセージを待ち受けます。
 
-アバター側には上記の `Heartrate` / `Heartrate2` / `Heartrate3` のいずれか（またはすべて）を Float / Int パラメータとして Expression Parameters に追加し、Animator でそれらを使ってシェーダーやアニメーションを駆動してください。
+アバター側には上記のパラメータ（必要なものだけで構いません）を Bool / Int / Float として Expression Parameters に追加し、Animator でそれらを使ってシェーダーやアニメーションを駆動してください。PIXEL PULSE など iron-heart 対応済みのアバターギミックを使う場合は、ギミック側の説明に従ってパラメータを設定するだけで動作します。
 
 ### 4. 実行
 
