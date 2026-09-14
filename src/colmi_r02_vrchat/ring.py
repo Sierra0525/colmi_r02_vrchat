@@ -72,13 +72,17 @@ async def stream_heart_rate(address: str, reconnect_delay: float = 5.0) -> Async
 
                 try:
                     while True:
+                        # The ring acks a continue packet almost instantly, so pacing this
+                        # purely off the queue wait would spam continue packets back-to-back
+                        # as fast as the ring replies. Send one, wait (generously) for its
+                        # ack, then explicitly sleep out the rest of CONTINUE_INTERVAL so we
+                        # poll at roughly a fixed ~1x/s rate regardless of ack latency.
+                        loop_start = asyncio.get_running_loop().time()
+                        await client.send_packet(real_time.get_continue_packet(reading_type))
                         try:
-                            data = await asyncio.wait_for(queue.get(), timeout=CONTINUE_INTERVAL)
+                            data = await asyncio.wait_for(queue.get(), timeout=2.0)
                         except asyncio.TimeoutError:
                             data = None
-
-                        # Keep the ring's real-time session alive whether or not new data arrived.
-                        await client.send_packet(real_time.get_continue_packet(reading_type))
 
                         if data is None:
                             yield NoReading()
@@ -89,6 +93,9 @@ async def stream_heart_rate(address: str, reconnect_delay: float = 5.0) -> Async
                             yield NoReading()
                         else:
                             yield HeartRate(data.value)
+
+                        elapsed = asyncio.get_running_loop().time() - loop_start
+                        await asyncio.sleep(max(0.0, CONTINUE_INTERVAL - elapsed))
                 finally:
                     try:
                         await client.send_packet(real_time.get_stop_packet(reading_type))
