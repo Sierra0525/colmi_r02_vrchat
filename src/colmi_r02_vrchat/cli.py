@@ -22,20 +22,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+NO_READING_LOG_EVERY = 5  # cycles (~seconds) between "still waiting" log lines
+
+
 async def run(address: str, osc_ip: str, osc_port: int, reconnect_delay: float) -> None:
     osc = VRChatOSC(osc_ip, osc_port)
+    no_reading_streak = 0
 
     async for event in stream_heart_rate(address, reconnect_delay=reconnect_delay):
         match event:
             case Connected():
                 osc.send_connected(True)
+                no_reading_streak = 0
             case Disconnected():
                 osc.send_connected(False)
             case HeartRate(bpm=bpm):
                 logger.info(f"Heart rate: {bpm} bpm")
                 osc.send_heart_rate(bpm)
+                no_reading_streak = 0
             case NoReading():
-                logger.debug("No valid reading this cycle (is the ring being worn?)")
+                no_reading_streak += 1
+                if no_reading_streak == 1 or no_reading_streak % NO_READING_LOG_EVERY == 0:
+                    logger.info("Waiting for a valid heart rate reading (is the ring worn snugly?)")
+                else:
+                    logger.debug("No valid reading this cycle")
 
 
 def main(argv: list[str] | None = None) -> None:
