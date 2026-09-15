@@ -24,14 +24,10 @@ directly instead of using colmi_r02_client.real_time.
 
 In practice, "streams on its own" seems to only hold for a short burst (a
 handful of readings over a second or two) before the ring goes quiet again,
-and enough quiet eventually drops the BLE connection outright, even when
-re-sending start as a nudge/keep-alive. One more difference from
-Gadgetbridge's implementation: colmi_r02_client.Client.send_packet() always
-writes "without response" (write_gatt_char(..., response=False)), while
-Gadgetbridge's ColmiConnection.writeToChar() uses WRITE_TYPE_DEFAULT, i.e. an
-acknowledged "write with response". The RX characteristic advertises both
-properties, so this shouldn't matter, but it's a real difference from the
-known-working implementation and costs nothing to match.
+and enough quiet eventually drops the BLE connection outright. So if nothing
+arrives for READING_TIMEOUT seconds, we re-send the start packet to kick off
+another measurement burst -- this both nudges the ring back into reporting
+and doubles as keep-alive traffic to avoid the connection timing out.
 """
 
 from __future__ import annotations
@@ -68,13 +64,6 @@ def _start_packet() -> bytearray:
 
 def _stop_packet() -> bytearray:
     return packet_module.make_packet(CMD_MANUAL_HEART_RATE, bytearray([_STOP_SUBCMD]))
-
-
-async def _send_with_response(client: Client, packet: bytearray) -> None:
-    """Like Client.send_packet(), but as an acknowledged write (matches
-    Gadgetbridge's WRITE_TYPE_DEFAULT) instead of write-without-response.
-    """
-    await client.bleak_client.write_gatt_char(client.rx_char, packet, response=True)
 
 
 @dataclass
@@ -129,7 +118,7 @@ async def stream_heart_rate(address: str, reconnect_delay: float = 5.0) -> Async
                 logger.info(f"Connected to ring at {address}")
                 yield Connected()
 
-                await _send_with_response(client, _start_packet())
+                await client.send_packet(_start_packet())
                 queue = client.queues[CMD_MANUAL_HEART_RATE]
 
                 try:
@@ -138,7 +127,7 @@ async def stream_heart_rate(address: str, reconnect_delay: float = 5.0) -> Async
                             data = await asyncio.wait_for(queue.get(), timeout=READING_TIMEOUT)
                         except asyncio.TimeoutError:
                             yield NoReading()
-                            await _send_with_response(client, _start_packet())
+                            await client.send_packet(_start_packet())
                             continue
 
                         if data.error_code == ERROR_NOT_WORN:
@@ -152,7 +141,7 @@ async def stream_heart_rate(address: str, reconnect_delay: float = 5.0) -> Async
                             yield HeartRate(data.bpm)
                 finally:
                     try:
-                        await _send_with_response(client, _stop_packet())
+                        await client.send_packet(_stop_packet())
                     except CONNECTION_ERRORS:
                         pass
         except CONNECTION_ERRORS as e:
