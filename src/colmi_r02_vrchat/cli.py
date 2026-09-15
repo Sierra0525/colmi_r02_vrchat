@@ -40,13 +40,10 @@ async def run(address: str, osc_ip: str, osc_port: int, reconnect_delay: float) 
                 logger.info(f"Heart rate: {bpm} bpm")
                 osc.send_heart_rate(bpm)
                 no_reading_streak = 0
-            case NoReading(not_worn=not_worn):
+            case NoReading():
                 no_reading_streak += 1
                 if no_reading_streak == 1 or no_reading_streak % NO_READING_LOG_EVERY == 0:
-                    if not_worn:
-                        logger.info("Ring reports it is not worn correctly")
-                    else:
-                        logger.info("Waiting for a valid heart rate reading (is the ring worn snugly?)")
+                    logger.info("Waiting for a valid heart rate reading (is the ring worn snugly?)")
                 else:
                     logger.debug("No valid reading this cycle")
 
