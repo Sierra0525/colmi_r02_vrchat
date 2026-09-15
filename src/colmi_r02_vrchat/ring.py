@@ -1,15 +1,26 @@
 """Continuous real-time heart rate streaming from a Colmi R02 ring.
 
-colmi_r02_client.Client.get_realtime_reading() sends a single start packet
-and then just listens, never sending the "continue" packet that the ring's
-protocol also defines (colmi_r02_client.real_time.get_continue_packet /
-Action.CONTINUE). In practice some rings stop reporting new samples and drop
-the BLE connection after roughly 30-40 seconds of a real-time session that
-nothing "continues" (observed as one HeartRate reading of 0, then silence,
-then a disconnect). So instead of using that helper, we drive the
-start/continue/stop protocol ourselves and send a continue packet at least
-once a second to keep the session alive, and reconnect if the ring still
-drops out (out of range, low battery, etc).
+colmi_r02_client.real_time models the "start real-time reading" command
+(0x69) as [0x69, reading_type, action] with a START/CONTINUE/STOP action
+byte and a separate reading-type byte (HEART_RATE=1, SPO2=3, etc). In
+testing against a real ring (firmware R02_3.00.17) that never produced a
+non-zero reading and eventually dropped the BLE connection, no matter which
+reading_type or continue cadence was tried.
+
+Gadgetbridge's actual, working Colmi R0x support (see
+service/devices/colmi/ColmiR0xDeviceSupport.java, ported in
+https://github.com/jonas-werner/ring-health-tracker/blob/main/app/src/main/java/dev/ring/health/ColmiProtocol.kt)
+uses a much simpler protocol for on-demand heart rate that doesn't match
+colmi_r02_client's model at all:
+
+    start: make_packet(0x69, [0x01])   # no reading-type byte
+    stop:  make_packet(0x69, [0x02])
+
+Once started, the ring streams bpm notifications on its own -- no periodic
+"continue" packet needed -- until the stop packet is sent. Response layout
+is [0x69, sub, error_code, bpm, ...], where error_code is 0=OK, 1=ring not
+worn correctly, 2=temporary error. This module implements that protocol
+directly instead of using colmi_r02_client.real_time.
 """
 
 from __future__ import annotations
@@ -21,7 +32,7 @@ from dataclasses import dataclass
 
 from bleak.exc import BleakError
 from colmi_r02_client import client as client_module
-from colmi_r02_client import real_time
+from colmi_r02_client import packet as packet_module
 from colmi_r02_client.client import Client
 
 logger = logging.getLogger(__name__)
@@ -29,37 +40,41 @@ logger = logging.getLogger(__name__)
 # Errors that mean "the BLE link is gone, try reconnecting" rather than a bug.
 CONNECTION_ERRORS = (BleakError, asyncio.TimeoutError, OSError, EOFError)
 
-# How often to send a "continue" packet to keep the ring's real-time session alive.
-CONTINUE_INTERVAL = 1.0
+CMD_MANUAL_HEART_RATE = 0x69
+_START_SUBCMD = 0x01
+_STOP_SUBCMD = 0x02
 
-# colmi_r02_client.real_time.RealTimeReading only defines HEART_RATE = 1, with
-# a comment that a value of 6 ("REAL_TIME_HEART_RATE" in other reverse-engineering
-# notes for this protocol) was "left out as it's redundant". On at least some
-# firmware (observed: R02_3.00.17) requesting type 1 never actually turns on the
-# PPG sensor -- readings stay 0 forever even though the official app measures
-# fine -- while type 6 is documented elsewhere as the real continuous-streaming
-# request. Try that raw value instead of the library's HEART_RATE enum member.
-REALTIME_HEART_RATE = 6
+# How long to wait for a notification before assuming something's wrong
+# (the ring streams on its own once started, so silence this long is unusual).
+READING_TIMEOUT = 5.0
+
+ERROR_NOT_WORN = 1
+
+
+def _start_packet() -> bytearray:
+    return packet_module.make_packet(CMD_MANUAL_HEART_RATE, bytearray([_START_SUBCMD]))
+
+
+def _stop_packet() -> bytearray:
+    return packet_module.make_packet(CMD_MANUAL_HEART_RATE, bytearray([_STOP_SUBCMD]))
 
 
 @dataclass
-class RawReading:
-    kind: int
+class LiveHrReading:
+    sub: int
     error_code: int
-    value: int
+    bpm: int
 
 
-def _parse_real_time_reading_tolerant(packet: bytearray) -> RawReading:
-    """Like real_time.parse_real_time_reading, but doesn't blow up on a `kind`
-    byte that isn't a member of the library's (incomplete) RealTimeReading enum.
-    """
-    assert packet[0] == real_time.CMD_START_REAL_TIME
-    return RawReading(kind=packet[1], error_code=packet[2], value=packet[3])
+def _parse_live_hr_packet(packet: bytearray) -> LiveHrReading:
+    assert packet[0] == CMD_MANUAL_HEART_RATE
+    return LiveHrReading(sub=packet[1], error_code=packet[2], bpm=packet[3])
 
 
-# Replace the library's strict parser for this one packet type so a `kind` of 6
-# doesn't raise ValueError inside bleak's notification callback.
-client_module.COMMAND_HANDLERS[real_time.CMD_START_REAL_TIME] = _parse_real_time_reading_tolerant
+# colmi_r02_client's own parser for this command expects a reading-type byte
+# that doesn't apply to this simpler start/stop protocol; install a compatible
+# one for the manual/live heart rate command.
+client_module.COMMAND_HANDLERS[CMD_MANUAL_HEART_RATE] = _parse_live_hr_packet
 
 
 @dataclass
@@ -81,6 +96,8 @@ class HeartRate:
 class NoReading:
     """No valid (non-zero) reading arrived this cycle, e.g. ring not worn/settling."""
 
+    not_worn: bool = False
+
 
 RingEvent = Connected | Disconnected | HeartRate | NoReading
 
@@ -88,46 +105,35 @@ RingEvent = Connected | Disconnected | HeartRate | NoReading
 async def stream_heart_rate(address: str, reconnect_delay: float = 5.0) -> AsyncIterator[RingEvent]:
     """Yield heart rate events from the ring forever, reconnecting on failure."""
 
-    reading_type = REALTIME_HEART_RATE
-
     while True:
         try:
             async with Client(address) as client:
                 logger.info(f"Connected to ring at {address}")
                 yield Connected()
 
-                await client.send_packet(real_time.get_start_packet(reading_type))
-                queue = client.queues[real_time.CMD_START_REAL_TIME]
+                await client.send_packet(_start_packet())
+                queue = client.queues[CMD_MANUAL_HEART_RATE]
 
                 try:
                     while True:
-                        # The ring acks a continue packet almost instantly, so pacing this
-                        # purely off the queue wait would spam continue packets back-to-back
-                        # as fast as the ring replies. Send one, wait (generously) for its
-                        # ack, then explicitly sleep out the rest of CONTINUE_INTERVAL so we
-                        # poll at roughly a fixed ~1x/s rate regardless of ack latency.
-                        loop_start = asyncio.get_running_loop().time()
-                        await client.send_packet(real_time.get_continue_packet(reading_type))
                         try:
-                            data = await asyncio.wait_for(queue.get(), timeout=2.0)
+                            data = await asyncio.wait_for(queue.get(), timeout=READING_TIMEOUT)
                         except asyncio.TimeoutError:
-                            data = None
+                            yield NoReading()
+                            continue
 
-                        if data is None:
-                            yield NoReading()
+                        if data.error_code == ERROR_NOT_WORN:
+                            yield NoReading(not_worn=True)
                         elif data.error_code != 0:
-                            logger.warning(f"Ring reported an error for reading kind {data.kind}: code {data.error_code}")
+                            logger.warning(f"Ring reported error code {data.error_code}")
                             yield NoReading()
-                        elif data.value == 0:
+                        elif data.bpm == 0:
                             yield NoReading()
                         else:
-                            yield HeartRate(data.value)
-
-                        elapsed = asyncio.get_running_loop().time() - loop_start
-                        await asyncio.sleep(max(0.0, CONTINUE_INTERVAL - elapsed))
+                            yield HeartRate(data.bpm)
                 finally:
                     try:
-                        await client.send_packet(real_time.get_stop_packet(reading_type))
+                        await client.send_packet(_stop_packet())
                     except CONNECTION_ERRORS:
                         pass
         except CONNECTION_ERRORS as e:
