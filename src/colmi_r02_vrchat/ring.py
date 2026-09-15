@@ -21,6 +21,13 @@ Once started, the ring streams bpm notifications on its own -- no periodic
 is [0x69, sub, error_code, bpm, ...], where error_code is 0=OK, 1=ring not
 worn correctly, 2=temporary error. This module implements that protocol
 directly instead of using colmi_r02_client.real_time.
+
+In practice, "streams on its own" seems to only hold for a short burst (a
+handful of readings over a second or two) before the ring goes quiet again,
+and enough quiet eventually drops the BLE connection outright. So if nothing
+arrives for READING_TIMEOUT seconds, we re-send the start packet to kick off
+another measurement burst -- this both nudges the ring back into reporting
+and doubles as keep-alive traffic to avoid the connection timing out.
 """
 
 from __future__ import annotations
@@ -44,9 +51,9 @@ CMD_MANUAL_HEART_RATE = 0x69
 _START_SUBCMD = 0x01
 _STOP_SUBCMD = 0x02
 
-# How long to wait for a notification before assuming something's wrong
-# (the ring streams on its own once started, so silence this long is unusual).
-READING_TIMEOUT = 5.0
+# How long to wait for a notification before re-sending start to kick off
+# another measurement burst (see module docstring).
+READING_TIMEOUT = 3.0
 
 ERROR_NOT_WORN = 1
 
@@ -120,6 +127,7 @@ async def stream_heart_rate(address: str, reconnect_delay: float = 5.0) -> Async
                             data = await asyncio.wait_for(queue.get(), timeout=READING_TIMEOUT)
                         except asyncio.TimeoutError:
                             yield NoReading()
+                            await client.send_packet(_start_packet())
                             continue
 
                         if data.error_code == ERROR_NOT_WORN:
