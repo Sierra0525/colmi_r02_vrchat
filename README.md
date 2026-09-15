@@ -86,8 +86,6 @@ Colmi R02 には心拍数を取るコマンドが実は2種類あり、`colmi_r0
 
 BLE 接続が切れた場合は自動的に再接続を試みます。
 
-なお `scripts/list_services.py` は、リングが公開している BLE の GATT サービス一覧を確認するための診断用スクリプトです（標準の Bluetooth Heart Rate Service には対応していないことをこの過程で確認済みです）。
-
 ## ライセンス
 
 このリポジトリ自体にライセンスの指定はありません。利用している `colmi_r02_client` のライセンスは [本家リポジトリ](https://github.com/tahnok/colmi_r02_client) を参照してください。
